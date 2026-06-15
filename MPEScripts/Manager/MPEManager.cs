@@ -4,9 +4,9 @@
  * 公司：SWEET
  * 项目：MotionPlatformEditor
  * 文件：MPEManager.cs
- * 作者：LeonLiu
- * 日期：2026/2/5 16:59:24
- * 功能：动感平台初始化管理
+ * 作者：LeonLiu (AI Assisted)
+ * 日期：2026/2/5 
+ * 功能：动感平台初始化管理 (新增3DOF/6DOF模式初始选择面板控制)
 *************************************************************************/
 
 using DemoApplication;
@@ -16,7 +16,6 @@ using RuntimeCurveEditor;
 
 using TMPro;
 using UnityEngine;
-
 
 namespace MPE
 {
@@ -32,25 +31,92 @@ namespace MPE
 
         public MediaPlayer mediaPlayer;//影片
 
-        public AnimationCurve animCurveRed;//animation curve that we can edit at run time
-        public AnimationCurve animCurveGreen;
-        public AnimationCurve animCurveYellow;
+        [Header("3DOF Curves")]
+        public AnimationCurve animCurveRed;    // Pitch 俯仰
+        public AnimationCurve animCurveGreen;  // Roll  滚转
+        public AnimationCurve animCurveYellow; // Heave 升降
+
+        [Header("6DOF Additional Curves")]
+        public AnimationCurve animCurveYaw;    // Yaw   偏航 (角度)
+        public AnimationCurve animCurveSway;   // Sway  横移 (毫米)
+        public AnimationCurve animCurveSurge;  // Surge 纵移 (毫米)
 
         public TimelineManager timelineManager;//时间轴 
         public RTAnimationCurve rtAnimationCurve;//曲线
-        public PlatformModelManager DOFPlatform;//3自由度平台
+        public PlatformModelManager DOFPlatform;//3自由度/6自由度平台
         public DataRecorder dataRecorder;//数据导出
 
+        [Header("System Mode")]
+        public bool is6DOFMode = false;
+
+        [Header("✨ New Selection UI Panels (新增选择面板控制)")]
+        [Tooltip("新建的包含【选择3DOF】和【选择6DOF】两个按钮的父物体面板")]
+        public GameObject platformModeSelectPanel;
+        [Tooltip("3自由度专属参数初始化面板 (包含A/B/C边长输入框等)")]
+        public GameObject initializationPanel3DOF;
+        [Tooltip("6自由度专属参数初始化面板 (包含动静长短边输入框等)")]
+        public GameObject initializationPanel6DOF;
+
+        [Header("3DOF Input Fields (3自由度专属)")]
         public TMP_InputField triangleAEdgesA;
         public TMP_InputField triangleAEdgesB;
         public TMP_InputField triangleAEdgesC;
-        public TMP_InputField stroke;
+        public TMP_InputField stroke3DOF;
+        public TMP_InputField maxStroke3DOF;
         public TMP_InputField maxAngle;
-        public TMP_InputField maxStroke;
 
+        [Header("6DOF Input Fields (6自由度专属)")]
+        public TMP_InputField topLongEdgeInput;
+        public TMP_InputField topShortEdgeInput;
+        public TMP_InputField baseLongEdgeInput;
+        public TMP_InputField baseShortEdgeInput;
+        public TMP_InputField stroke6DOF;
+        public TMP_InputField maxStroke6DOF;
+
+        [Header("UI Panels")]
         public GameObject DOFPlatformPanel;
         public GameObject TimeLineSlider;
         public GameObject FileManagerPanel;
+
+        // =========================================================
+        // ✨ 新增：模式选择按钮绑定的公有方法
+        // =========================================================
+
+        /// <summary>
+        /// 当点击【选择3DOF】按钮时绑定此方法
+        /// </summary>
+        public void OnSelect3DOFMode()
+        {
+            is6DOFMode = false;
+
+            // 切换初始化面板的显隐
+            if (initializationPanel3DOF != null) initializationPanel3DOF.SetActive(true);
+            if (initializationPanel6DOF != null) initializationPanel6DOF.SetActive(false);
+
+            // 关闭选择按钮自身的面板
+            if (platformModeSelectPanel != null) platformModeSelectPanel.SetActive(false);
+
+            Debug.Log("系统已切换至：3自由度(3DOF) 参数配置模式。");
+        }
+
+        /// <summary>
+        /// 当点击【选择6DOF】按钮时绑定此方法
+        /// </summary>
+        public void OnSelect6DOFMode()
+        {
+            is6DOFMode = true;
+
+            // 切换初始化面板的显隐
+            if (initializationPanel3DOF != null) initializationPanel3DOF.SetActive(false);
+            if (initializationPanel6DOF != null) initializationPanel6DOF.SetActive(true);
+
+            // 关闭选择按钮自身的面板
+            if (platformModeSelectPanel != null) platformModeSelectPanel.SetActive(false);
+
+            Debug.Log("系统已切换至：6自由度(6DOF) 参数配置模式。");
+        }
+
+        // =========================================================
 
         public void InitializationTime()
         {
@@ -61,26 +127,31 @@ namespace MPE
             DOFPlatformPanel.SetActive(false);
             FileManagerPanel.SetActive(true);
 
-            // 将UI输入的毫米(mm)转换为系统标准的米(m)
-            Global.Instance.stroke = float.Parse(stroke.text) / 1000f;
-            Global.Instance.maxStroke = float.Parse(maxStroke.text) / 1000f;
-            Global.Instance.maxAngle = float.Parse(maxAngle.text); // 角度单位保持不变
+            if (is6DOFMode)
+            {
+                Global.Instance.stroke = float.Parse(stroke6DOF.text) / 1000f;
+                Global.Instance.maxStroke = float.Parse(maxStroke6DOF.text) / 1000f;
+                Global.Instance.maxAngle = 90f;
+            }
+            else
+            {
+                Global.Instance.stroke = float.Parse(stroke3DOF.text) / 1000f;
+                Global.Instance.maxStroke = float.Parse(maxStroke3DOF.text) / 1000f;
+                Global.Instance.maxAngle = float.Parse(maxAngle.text);
+            }
 
             dataRecorder.Initialization();
 
-            // 注册时间轴拖拽事件以同步视频
             timelineManager._slider.onValueChanged.RemoveListener(OnTimelineScrubbed);
             timelineManager._slider.onValueChanged.AddListener(OnTimelineScrubbed);
         }
 
-        // === 处理用户手动拖拽时间轴 ===
         private void OnTimelineScrubbed(float value)
         {
-            if (isSyncingTime) return; // 如果是播放器自己推着走，就忽略
+            if (isSyncingTime) return;
 
             if (mediaPlayer != null && mediaPlayer.Control != null)
             {
-                // 防频繁刷新卡死机制：只有时间变动足够大，或者鼠标松开时才 Seek
                 if (Mathf.Abs(lastSeekValue - value) > 0.05f || !Input.GetMouseButton(0))
                 {
                     mediaPlayer.Control.Seek(value);
@@ -100,45 +171,97 @@ namespace MPE
 
         public void AddCurve()
         {
+            float angleLimit = is6DOFMode ? 45f : float.Parse(maxAngle.text);
+
             if (rtAnimationCurve.Add(ref animCurveRed))
             {
-                rtAnimationCurve.SetGradYRange(-float.Parse(maxAngle.text), float.Parse(maxAngle.text));
+                rtAnimationCurve.SetGradYRange(-angleLimit, angleLimit);
                 rtAnimationCurve.SetGradXRange(0, rtAnimationCurve.gradXRangeMax);
             }
 
             if (rtAnimationCurve.Add(ref animCurveGreen))
             {
-                rtAnimationCurve.SetGradYRange(-float.Parse(maxAngle.text), float.Parse(maxAngle.text));
+                rtAnimationCurve.SetGradYRange(-angleLimit, angleLimit);
                 rtAnimationCurve.SetGradXRange(0, rtAnimationCurve.gradXRangeMax);
             }
 
             if (rtAnimationCurve.Add(ref animCurveYellow))
             {
-                // 核心修改：让曲线编辑器的 Y 轴范围直接使用毫米数值，方便操作人员看图和编辑
-                rtAnimationCurve.SetGradYRange(0f, float.Parse(maxStroke.text));
+                string currentMaxStrokeText = is6DOFMode ? maxStroke6DOF.text : maxStroke3DOF.text;
+                rtAnimationCurve.SetGradYRange(0f, float.Parse(currentMaxStrokeText));
                 rtAnimationCurve.SetGradXRange(0, rtAnimationCurve.gradXRangeMax);
+            }
+
+            if (is6DOFMode)
+            {
+                if (rtAnimationCurve.Add(ref animCurveYaw))
+                {
+                    rtAnimationCurve.SetGradYRange(-angleLimit, angleLimit);
+                    rtAnimationCurve.SetGradXRange(0, rtAnimationCurve.gradXRangeMax);
+                }
+
+                float displacementLimit = float.Parse(maxStroke6DOF.text);
+
+                if (rtAnimationCurve.Add(ref animCurveSway))
+                {
+                    rtAnimationCurve.SetGradYRange(-displacementLimit, displacementLimit);
+                    rtAnimationCurve.SetGradXRange(0, rtAnimationCurve.gradXRangeMax);
+                }
+
+                if (rtAnimationCurve.Add(ref animCurveSurge))
+                {
+                    rtAnimationCurve.SetGradYRange(-displacementLimit, displacementLimit);
+                    rtAnimationCurve.SetGradXRange(0, rtAnimationCurve.gradXRangeMax);
+                }
             }
         }
 
         private void SetDOFPlatform()
         {
-            if (triangleAEdgesA.text != "" && triangleAEdgesB.text != "" && triangleAEdgesC.text != "" && stroke.text != "")
+            if (is6DOFMode)
             {
-                // 将输入的边长(毫米)转化为米
-                DOFPlatform.a = float.Parse(triangleAEdgesA.text) / 1000f;
-                DOFPlatform.b = float.Parse(triangleAEdgesB.text) / 1000f;
-                DOFPlatform.c = float.Parse(triangleAEdgesC.text) / 1000f;
+                if (topLongEdgeInput.text != "" && topShortEdgeInput.text != "" &&
+                    baseLongEdgeInput.text != "" && baseShortEdgeInput.text != "" && stroke6DOF.text != "")
+                {
+                    DOFPlatform.currentPlatformType = PlatformModelManager.PlatformType.DOF6;
 
-                float strokeM = float.Parse(stroke.text) / 1000f;
-                float maxStrokeM = float.Parse(maxStroke.text) / 1000f;
+                    DOFPlatform.topLongEdge = float.Parse(topLongEdgeInput.text);
+                    DOFPlatform.topShortEdge = float.Parse(topShortEdgeInput.text);
+                    DOFPlatform.baseLongEdge = float.Parse(baseLongEdgeInput.text);
+                    DOFPlatform.baseShortEdge = float.Parse(baseShortEdgeInput.text);
 
-                DOFPlatform.height = strokeM;
+                    DOFPlatform.Cleanup();
+                    DOFPlatform.InitializeSystem();
 
+                    float strokeM = float.Parse(stroke6DOF.text) / 1000f;
+                    DOFPlatform.height = DOFPlatform.GetInitialHeightFromCylinderLength(strokeM);
 
-                DOFPlatform.Cleanup();
-                DOFPlatform.InitializeSystem();
+                    if (DOFPlatform.triangleA != null)
+                    {
+                        DOFPlatform.triangleA.transform.localPosition = new Vector3(0, DOFPlatform.height, 0);
+                    }
 
-                dofEditState = true;
+                    dofEditState = true;
+                }
+            }
+            else
+            {
+                if (triangleAEdgesA.text != "" && triangleAEdgesB.text != "" && triangleAEdgesC.text != "" && stroke3DOF.text != "")
+                {
+                    DOFPlatform.currentPlatformType = PlatformModelManager.PlatformType.DOF3;
+
+                    DOFPlatform.a = float.Parse(triangleAEdgesA.text) / 1000f;
+                    DOFPlatform.b = float.Parse(triangleAEdgesB.text) / 1000f;
+                    DOFPlatform.c = float.Parse(triangleAEdgesC.text) / 1000f;
+
+                    float strokeM = float.Parse(stroke3DOF.text) / 1000f;
+                    DOFPlatform.height = strokeM;
+
+                    DOFPlatform.Cleanup();
+                    DOFPlatform.InitializeSystem();
+
+                    dofEditState = true;
+                }
             }
         }
 
@@ -163,9 +286,6 @@ namespace MPE
             dataRecorder.StartProcess();
         }
 
-        /// <summary>
-        /// 供 UI 按钮调用的：播放视频
-        /// </summary>
         public void PlayVideo()
         {
             if (mediaPlayer != null && mediaPlayer.Control != null)
@@ -174,9 +294,6 @@ namespace MPE
             }
         }
 
-        /// <summary>
-        /// 供 UI 按钮调用的：暂停视频
-        /// </summary>
         public void PauseVideo()
         {
             if (mediaPlayer != null && mediaPlayer.Control != null)
@@ -185,9 +302,6 @@ namespace MPE
             }
         }
 
-        /// <summary>
-        /// 供 UI 按钮调用的：切换 播放/暂停 状态（绑定一个按钮即可）
-        /// </summary>
         public void TogglePlayPause()
         {
             if (mediaPlayer != null && mediaPlayer.Control != null)
@@ -205,10 +319,8 @@ namespace MPE
 
         private void Update()
         {
-            // 1. 同步逻辑：如果视频正在播放，将视频进度赋予 Slider
             if (mediaPlayer != null && mediaPlayer.Control != null && mediaPlayer.Control.IsPlaying())
             {
-                // 只要检测到用户按住了鼠标左键（可能正在拖拽定位），就立刻暂停把视频进度覆盖给 Slider
                 if (!Input.GetMouseButton(0))
                 {
                     isSyncingTime = true;
@@ -219,25 +331,26 @@ namespace MPE
 
             if (dofEditState)
             {
-                // 1. 获取目标角度并应用旋转
                 float targetPitch = animCurveRed.Evaluate(timelineManager._slider.value);
                 float targetRoll = animCurveGreen.Evaluate(timelineManager._slider.value);
-                Quaternion targetRot = Quaternion.Euler(targetPitch, 0, targetRoll);
+                float targetYaw = is6DOFMode ? animCurveYaw.Evaluate(timelineManager._slider.value) : 0f;
+
+                Quaternion targetRot = Quaternion.Euler(targetPitch, targetYaw, targetRoll);
                 DOFPlatform.triangleA.transform.localRotation = targetRot;
 
-                // 2. 获取基础目标高度 (毫米转米)
-                float baseStrokeM = float.Parse(stroke.text) / 1000f;
-                float yellowCurveM = animCurveYellow.Evaluate(timelineManager._slider.value) / 1000f;
-                float targetHeightM = baseStrokeM + yellowCurveM;
+                string currentStrokeText = is6DOFMode ? stroke6DOF.text : stroke3DOF.text;
+                float baseCylinderM = float.Parse(currentStrokeText) / 1000f;
 
-                // 3. ✨ 核心修改：模拟 Unity "Center" 模式的完美随动算法
+                float baseHeightM = DOFPlatform.GetInitialHeightFromCylinderLength(baseCylinderM);
+                float yellowCurveM = animCurveYellow.Evaluate(timelineManager._slider.value) / 1000f;
+                float targetHeightM = baseHeightM + yellowCurveM;
+
                 MeshFilter mf = DOFPlatform.triangleA.GetComponent<MeshFilter>();
                 if (mf != null && mf.sharedMesh != null)
                 {
                     float maxLocalY = -9999f;
                     float minLocalY = 9999f;
 
-                    // 遍历顶部的三个顶点，找到由于倾斜产生的最高点和最低点
                     foreach (Vector3 vertex in mf.sharedMesh.vertices)
                     {
                         Vector3 rotatedVertex = targetRot * vertex;
@@ -245,16 +358,15 @@ namespace MPE
                         if (rotatedVertex.y < minLocalY) minLocalY = rotatedVertex.y;
                     }
 
-                    // Center 模式的核心定义：Y轴中心点 = (最高点 + 最低点) / 2
                     float localCenterY = (maxLocalY + minLocalY) / 2f;
-
-                    // 扣除这个偏移量，强制让平台的包围盒中心(Center)稳稳停留在黄线设定的高度上
                     targetHeightM -= localCenterY;
                 }
 
-                // 4. 应用最终的随动高度
+                float targetSwayM = is6DOFMode ? (animCurveSway.Evaluate(timelineManager._slider.value) / 1000f) : 0f;
+                float targetSurgeM = is6DOFMode ? (animCurveSurge.Evaluate(timelineManager._slider.value) / 1000f) : 0f;
+
                 DOFPlatform.height = targetHeightM;
-                DOFPlatform.triangleA.transform.localPosition = new Vector3(0, targetHeightM, 0);
+                DOFPlatform.triangleA.transform.localPosition = new Vector3(targetSwayM, targetHeightM, targetSurgeM);
             }
         }
     }

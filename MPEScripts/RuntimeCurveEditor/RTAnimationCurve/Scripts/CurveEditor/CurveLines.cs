@@ -757,39 +757,19 @@ namespace RuntimeCurveEditor
             }
         }
 
-        // === 新增：专门处理使用数字键切换激活曲线的方法 ===
+        // === 升级：专门处理使用数字键切换激活曲线的方法 (扩展支持 6 条线) ===
         private void HandleKeyboardCurveSelection()
         {
-            // 确保曲线列表存在且已加载
             if (curveFormList == null || curveFormList.Count == 0) return;
-
-            // 如果编辑面板或者输入框正在被占用（比如正在输入数值），则屏蔽快捷键，防止输入数字时误切曲线
             if (keyValue != null && keyValue.FocusOnInputFields()) return;
 
-            // 检测数字键 1 (兼容小键盘1 和 主键盘1)
-            if (Input.GetKeyDown(KeyCode.Keypad1) || Input.GetKeyDown(KeyCode.Alpha1))
-            {
-                if (curveFormList.Count > 0)
-                {
-                    SelectCurveByIndex(0);
-                }
-            }
-            // 检测数字键 2 (兼容小键盘2 和 主键盘2)
-            else if (Input.GetKeyDown(KeyCode.Keypad2) || Input.GetKeyDown(KeyCode.Alpha2))
-            {
-                if (curveFormList.Count > 1)
-                {
-                    SelectCurveByIndex(1);
-                }
-            }
-            // 检测数字键 3 (兼容小键盘3 和 主键盘3)
-            else if (Input.GetKeyDown(KeyCode.Keypad3) || Input.GetKeyDown(KeyCode.Alpha3))
-            {
-                if (curveFormList.Count > 2)
-                {
-                    SelectCurveByIndex(2);
-                }
-            }
+            if (Input.GetKeyDown(KeyCode.Keypad1) || Input.GetKeyDown(KeyCode.Alpha1)) { if (curveFormList.Count > 0) SelectCurveByIndex(0); }
+            else if (Input.GetKeyDown(KeyCode.Keypad2) || Input.GetKeyDown(KeyCode.Alpha2)) { if (curveFormList.Count > 1) SelectCurveByIndex(1); }
+            else if (Input.GetKeyDown(KeyCode.Keypad3) || Input.GetKeyDown(KeyCode.Alpha3)) { if (curveFormList.Count > 2) SelectCurveByIndex(2); }
+            // ✨ 新增：支持 6DOF 的后三条曲线快捷切换
+            else if (Input.GetKeyDown(KeyCode.Keypad4) || Input.GetKeyDown(KeyCode.Alpha4)) { if (curveFormList.Count > 3) SelectCurveByIndex(3); }
+            else if (Input.GetKeyDown(KeyCode.Keypad5) || Input.GetKeyDown(KeyCode.Alpha5)) { if (curveFormList.Count > 4) SelectCurveByIndex(4); }
+            else if (Input.GetKeyDown(KeyCode.Keypad6) || Input.GetKeyDown(KeyCode.Alpha6)) { if (curveFormList.Count > 5) SelectCurveByIndex(5); }
         }
 
         /// <summary>
@@ -1729,13 +1709,11 @@ namespace RuntimeCurveEditor
             if (index < 0 || index >= curveFormList.Count) return;
 
             CurveForm targetCurveForm = curveFormList[index];
-
-            // ✨ 核心修改：反转可见性
             targetCurveForm.isVisible = !targetCurveForm.isVisible;
 
-            // 隐藏时的安全清理逻辑
             if (!targetCurveForm.isVisible)
             {
+                // 如果隐藏的恰好是当前正在被激活(用于显示Y轴刻度)的曲线
                 if (ActiveCurveForm == targetCurveForm)
                 {
                     selectedKeyIndex = KeyHandling.UNSELECTED;
@@ -1747,15 +1725,24 @@ namespace RuntimeCurveEditor
                     {
                         keyValue.SetLabelEnabled(false);
                     }
+
+                    // ✨ 核心修复：自动寻找下一条可见的曲线作为基准，确保 Y 轴刻度能正确切换！
+                    foreach (var form in curveFormList)
+                    {
+                        if (form.isVisible)
+                        {
+                            UpdateActiveCurveForm(form);
+                            break;
+                        }
+                    }
                 }
             }
             else
             {
-                // ✨ 可选优化：当重新显示一条曲线时，顺便把它设为激活(焦点)，方便直接编辑
+                // 如果是重新显示一条曲线，顺便把它设为激活(焦点)，方便直接编辑
                 UpdateActiveCurveForm(targetCurveForm);
             }
 
-            // 触发全局重绘，刷新视觉
             AlterData();
             Curves.TriggerUpdateCurves();
         }
@@ -1768,7 +1755,6 @@ namespace RuntimeCurveEditor
         {
             if (curveFormList == null || curveFormList.Count == 0) return;
 
-            // 1. 判断当前状态：如果所有曲线都已经显示，则目标状态为"隐藏"；否则目标状态为"全部显示"
             bool allVisible = true;
             foreach (CurveForm form in curveFormList)
             {
@@ -1779,32 +1765,34 @@ namespace RuntimeCurveEditor
                 }
             }
 
-            // 目标状态反转
             bool targetVisibility = !allVisible;
 
-            // 2. 遍历应用目标状态
             foreach (CurveForm form in curveFormList)
             {
                 form.isVisible = targetVisibility;
             }
 
-            // 3. 安全清理逻辑：如果是执行“全部隐藏”，必须清空所有的关键帧选中与编辑状态，防止报错
             if (!targetVisibility)
             {
                 selectedKeyIndex = KeyHandling.UNSELECTED;
-
                 if (multipleKeySelection != null && multipleKeySelection.MultipleKeysAreSelected())
                 {
                     multipleKeySelection.ClearMultipleKeySelection();
                 }
-
                 if (keyValue != null)
                 {
                     keyValue.SetLabelEnabled(false);
                 }
             }
+            else
+            {
+                // ✨ 核心修复：全部显示时，默认把第一条线（Pitch）设为激活基准
+                if (curveFormList.Count > 0)
+                {
+                    UpdateActiveCurveForm(curveFormList[0]);
+                }
+            }
 
-            // 4. 触发全局数据更新和画面重绘
             AlterData();
             Curves.TriggerUpdateCurves();
         }

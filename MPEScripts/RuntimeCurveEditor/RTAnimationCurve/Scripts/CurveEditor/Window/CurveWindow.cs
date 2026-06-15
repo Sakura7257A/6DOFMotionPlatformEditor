@@ -40,6 +40,10 @@ namespace RuntimeCurveEditor
 
         public MPEManager mPEManager;
 
+        [Header("DOF Button Panels")]
+        public GameObject dof3ButtonPanel; // 3自由度按钮父物体
+        public GameObject dof6ButtonPanel; // 6自由度按钮父物体
+
         public Slider timeLineSlider;
 
         // 1. 新增变量：引用文字标签
@@ -118,17 +122,22 @@ namespace RuntimeCurveEditor
             Cursor.SetCursor(null, Vector2.zero, CursorMode.ForceSoftware);
         }
 
-        void Start() {
-
-
-
+        void Start()
+        {
             timeLineSlider = GameObject.Find("TimeLineSlider").GetComponent<Slider>();
             timeLineSlider.onValueChanged.AddListener(OnSliderChanged);
 
-
             mPEManager = GameObject.Find("ScriptsManager").GetComponent<MPEManager>();
 
+            // ✨ 新增：预制体生成时，自动去问 MPEManager 现在是什么模式，从而决定显示哪套按钮
+            if (mPEManager != null)
+            {
+                if (dof3ButtonPanel != null) dof3ButtonPanel.SetActive(!mPEManager.is6DOFMode);
+                if (dof6ButtonPanel != null) dof6ButtonPanel.SetActive(mPEManager.is6DOFMode);
+            }
+
             string layerName = LayerMask.LayerToName(MESH_LAYER);
+
             if (layerName == "")
             {
                 Debug.LogWarning("Layer " + MESH_LAYER + " has no name. It should be named " + LAYER_NAME + " like in documentation!");
