@@ -5,7 +5,7 @@
  * 项目：MotionPlatformEditor
  * 文件：DataRecorder.cs
  * 作者：LeonLiu (AI Assisted)
- * 功能：数据导出 (包含高阶曲线平滑拟合功能，全面兼容6自由度与软限位)
+ * 功能：数据导出 (完全正序规范版：1号缸~N号缸严格按列顺序输出)
 *************************************************************************/
 using MPE;
 using System.Collections;
@@ -28,16 +28,12 @@ namespace MPE
         public float duration;
 
         [Header("Speed Settings")]
-        [Tooltip("每一帧处理多少次10ms步进。")]
         public int stepsPerFrame = 100;
 
-        [Header("Smoothing Settings (平滑拟合)")]
-        [Tooltip("是否在导出前对数据曲线进行平滑处理")]
+        [Header("Smoothing Settings")]
         public bool enableSmoothing = true;
-        [Tooltip("平滑采样窗口大小：数值越大，曲线越平滑，但可能会略微损失一些尖锐的极值动作 (推荐: 10~20)")]
         [Range(1, 100)]
         public int smoothWindowSize = 15;
-        [Tooltip("平滑迭代次数：多次迭代能达到接近【高斯模糊】的高级丝滑拟合效果 (推荐: 3)")]
         [Range(1, 10)]
         public int smoothPasses = 3;
 
@@ -46,6 +42,8 @@ namespace MPE
 
         public PlatformModelManager platformModelManager;
         public MPEManager mpeManager;
+
+        public static bool EnableLegacyHardwareCompat = false;
 
         public void Initialization()
         {
@@ -59,17 +57,18 @@ namespace MPE
             if (!isRecording)
             {
                 string timeStamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                string fileName = $"RecordData_{timeStamp}.txt";
+                string modePrefix = mpeManager.is6DOFMode ? "6DOF" : "3DOF";
+                string fileName = $"{modePrefix}_{timeStamp}.txt";
 
-                string exeDirectory = Directory.GetParent(Application.dataPath).FullName + "/RecordData";
+                string baseDirectory = Directory.GetParent(Application.dataPath).FullName + "/RecordData";
+                string targetDirectory = Path.Combine(baseDirectory, modePrefix);
 
-                if (!Directory.Exists(exeDirectory))
+                if (!Directory.Exists(targetDirectory))
                 {
-                    Directory.CreateDirectory(exeDirectory);
+                    Directory.CreateDirectory(targetDirectory);
                 }
 
-                currentFilePath = Path.Combine(exeDirectory, fileName);
-
+                currentFilePath = Path.Combine(targetDirectory, fileName);
                 StartCoroutine(RecordAndProgressFast());
             }
         }
@@ -80,7 +79,6 @@ namespace MPE
             const float recordInterval = 0.01f;
             float simulatedElapsed = 0f;
 
-            // 获取上下平台的顶点数据
             Vector3[] topVertices = platformModelManager.triangleA.GetComponent<MeshFilter>().sharedMesh.vertices;
             Vector3[] baseVertices = platformModelManager.triangleB.GetComponent<MeshFilter>().sharedMesh.vertices;
 
@@ -88,6 +86,9 @@ namespace MPE
 
             float minSafeLength = Global.Instance.stroke;
             float maxSafeLength = Global.Instance.stroke + Global.Instance.maxStroke;
+
+            // ✨ 1. 获取全局动态量程 (如 10, 100, 350 等)
+            float dataScale = mpeManager.GetDataScale();
 
             List<float[]> rawDataList = new List<float[]>();
 
@@ -97,20 +98,18 @@ namespace MPE
                 {
                     if (simulatedElapsed > duration) break;
 
-                    // ✨ 读取 6 个通道的曲线数据
                     float targetPitch = mpeManager.animCurveRed.Evaluate(simulatedElapsed);
                     float targetRoll = mpeManager.animCurveGreen.Evaluate(simulatedElapsed);
                     float targetYaw = (mpeManager.is6DOFMode && mpeManager.animCurveYaw != null) ? mpeManager.animCurveYaw.Evaluate(simulatedElapsed) : 0f;
 
-                    float yellowCurveM = mpeManager.animCurveYellow.Evaluate(simulatedElapsed) / 1000f;
                     float swayM = (mpeManager.is6DOFMode && mpeManager.animCurveSway != null) ? (mpeManager.animCurveSway.Evaluate(simulatedElapsed) / 1000f) : 0f;
                     float surgeM = (mpeManager.is6DOFMode && mpeManager.animCurveSurge != null) ? (mpeManager.animCurveSurge.Evaluate(simulatedElapsed) / 1000f) : 0f;
 
-                    // ✨ 修复离线导出时的基础高度 BUG (调用你在物理层写的几何算法)
-                    float baseHeightM = platformModelManager.GetInitialHeightFromCylinderLength(Global.Instance.stroke);
-                    float targetHeightM = baseHeightM + yellowCurveM;
+                    // ✨ 2. 空间几何非线性高度补偿 (修复了高度增量与缸长增量不匹配的 BUG)
+                    float yellowCurveM = mpeManager.animCurveYellow.Evaluate(simulatedElapsed) / 1000f;
+                    float targetCylinderLengthM = Global.Instance.stroke + yellowCurveM;
+                    float targetHeightM = platformModelManager.GetHeightFromCylinderLength(targetCylinderLengthM);
 
-                    // 组合目标旋转
                     Quaternion reqRot = Quaternion.Euler(targetPitch, targetYaw, targetRoll);
 
                     // Center 模式高度随动补偿
@@ -125,44 +124,40 @@ namespace MPE
                     float localCenterY = (maxLocalY + minLocalY) / 2f;
                     targetHeightM -= localCenterY;
 
-                    // ✨ 组合包含横移、纵移和升降的终极空间坐标
                     Vector3 platformTranslation = new Vector3(swayM, targetHeightM, surgeM);
-
                     float[] currentFrameData = new float[axisCount];
 
                     for (int leg = 0; leg < axisCount; leg++)
                     {
-                        Vector3 localTop = topVertices[leg];
-                        // 旋转加上偏移，计算世界空间位置
+                        // ✨ 3. 自适应缸号偏移映射 (通过取余数 % axisCount 完美兼容 3DOF 和 6DOF)
+                        int mappedLeg = (leg + platformModelManager.cylinderIndexShift) % axisCount;
+
+                        Vector3 localTop = topVertices[mappedLeg];
                         Vector3 worldTop = (reqRot * localTop) + platformTranslation;
 
-                        int baseIndex = leg;
+                        int baseIndex = mappedLeg;
                         if (mpeManager.is6DOFMode)
                         {
-                            baseIndex = (leg + 1) % 6; // 6自由度交叉连线
+                            baseIndex = (mappedLeg + 1) % 6; // 6DOF 的斯图尔特交叉连杆
                         }
                         Vector3 worldBase = baseVertices[baseIndex];
 
                         float rawDist = Vector3.Distance(worldTop, worldBase);
 
-                        // 物理层面的安全软限位 (防顶缸)
+                        // 物理层面的安全软限位 (防顶缸/拉扯)
                         float safeDist = Mathf.Clamp(rawDist, minSafeLength, maxSafeLength);
 
-                        currentFrameData[leg] = Mathf.Clamp(((safeDist - Global.Instance.stroke) / Global.Instance.maxStroke) * 10f, 0f, 10f);
+                        // ✨ 4. 使用全局 dataScale 动态缩放输出量级
+                        currentFrameData[leg] = Mathf.Clamp(((safeDist - Global.Instance.stroke) / Global.Instance.maxStroke) * dataScale, 0f, dataScale);
                     }
 
-                    // 兼容旧数据的反向索引映射
+                    // ✨ 5. 彻底的正序规范映射：物理空间的1~N号缸，严格对应文件导出的第1~N列
                     float[] mappedData = new float[axisCount];
-                    if (!mpeManager.is6DOFMode)
+                    for (int j = 0; j < axisCount; j++)
                     {
-                        mappedData[0] = currentFrameData[2];
-                        mappedData[1] = currentFrameData[1];
-                        mappedData[2] = currentFrameData[0];
+                        mappedData[j] = currentFrameData[j];
                     }
-                    else
-                    {
-                        for (int j = 0; j < 6; j++) mappedData[j] = currentFrameData[j];
-                    }
+
 
                     rawDataList.Add(mappedData);
                     simulatedElapsed += recordInterval;
@@ -172,14 +167,13 @@ namespace MPE
                 yield return null;
             }
 
-            // 执行曲线平滑拟合算法
+            // 执行数据平滑降噪处理
             if (enableSmoothing)
             {
-                Debug.Log("正在执行数据曲线高斯平滑降噪...");
                 rawDataList = ApplyGaussianSmoothing(rawDataList, smoothWindowSize, smoothPasses, axisCount);
             }
 
-            // ✨ 核心修改 4：将平滑后的数据动态写入 TXT (支持6列)
+            // 写入本地 TXT 文件
             using (StreamWriter writer = new StreamWriter(currentFilePath, false, new UTF8Encoding(false)))
             {
                 foreach (float[] data in rawDataList)
@@ -196,13 +190,10 @@ namespace MPE
             }
 
             progressBar.value = maxValue;
-            Debug.Log($"极速无损导出(含平滑)成功！已保存至: {currentFilePath}");
+            Debug.Log($"动作数据已按照 {dataScale} 量程规范正序导出成功！路径: {currentFilePath}");
             isRecording = false;
         }
 
-        // =========================================================
-        // ✨ 升级版：兼容多轴数组的曲线拟合与平滑算法
-        // =========================================================
         private List<float[]> ApplyGaussianSmoothing(List<float[]> input, int windowSize, int passes, int axisCount)
         {
             if (input == null || input.Count < 3 || windowSize <= 0 || passes <= 0)
@@ -224,7 +215,6 @@ namespace MPE
                     for (int j = -windowSize; j <= windowSize; j++)
                     {
                         int idx = i + j;
-
                         if (idx < 0) idx = 0;
                         else if (idx >= result.Count) idx = result.Count - 1;
 
@@ -249,7 +239,6 @@ namespace MPE
                     }
                 }
             }
-
             return result;
         }
     }

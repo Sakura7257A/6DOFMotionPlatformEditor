@@ -22,6 +22,14 @@ namespace MPE
         [Header("System Mode")]
         public PlatformType currentPlatformType = PlatformType.DOF3;
 
+        [Tooltip("缸号连线偏移: 0表示1-2号为短边，1表示1-2号为长边 (可填0~5)")]
+        [Range(0, 5)]
+        public int cylinderIndexShift = 0;
+
+        // ✨ 新增：控制缸号生成的方向
+        [Tooltip("缸号排序方向：默认逆时针(取消勾选)，勾选则为顺时针")]
+        public bool isClockwise = false;
+
         [Header("Settings")]
         public string targetLayerName = "Triangle";
         public Material materialTriangleA; // 顶部平台(动)材质
@@ -53,6 +61,10 @@ namespace MPE
         [Header("Vertical Offset")]
         public float height = 3f;
 
+        // ✨ 新增：用于标识方向的红线渲染器
+        private LineRenderer shortEdgeMarker;
+        private LineRenderer longEdgeMarker;
+
         [Header("Read Only Data (Output)")]
         // 最大支持 6 根缸长数据导出
         public float[] linkDistances = new float[6];
@@ -73,6 +85,10 @@ namespace MPE
 
         float lastA, lastB, lastC, lastHeight;
         float lastTShort, lastTLong, lastBShort, lastBLong, lastPhaseOffset;
+
+        // ✨ 新增：用于检测面板里的勾选状态是否发生改变
+        bool lastClockwise;
+
         Material lastMaterialA;
         Material lastMaterialB;
 
@@ -86,17 +102,19 @@ namespace MPE
 
             if (createState)
             {
-                // 检测尺寸是否发生变化，自动重建网格
+                // 检测尺寸或硬件标定是否发生变化，自动重建网格
                 bool needsRebuild = false;
                 if (currentPlatformType == PlatformType.DOF3)
                 {
-                    if (a != lastA || b != lastB || c != lastC) needsRebuild = true;
+                    // ✨ 修正：3DOF 模式下也将 isClockwise != lastClockwise 加入判定，确保勾选时画面实时刷新
+                    if (a != lastA || b != lastB || c != lastC || isClockwise != lastClockwise) needsRebuild = true;
                 }
                 else
                 {
                     if (topShortEdge != lastTShort || topLongEdge != lastTLong ||
                         baseShortEdge != lastBShort || baseLongEdge != lastBLong ||
-                        topPhaseOffset != lastPhaseOffset) needsRebuild = true;
+                        topPhaseOffset != lastPhaseOffset ||
+                        isClockwise != lastClockwise) needsRebuild = true;
                 }
 
                 if (needsRebuild)
@@ -117,6 +135,8 @@ namespace MPE
 
                 // ⛔🔥 将 UpdateLinksAndLabels() 从这里移走
             }
+
+
         }
 
         // ✨ 新增：使用 LateUpdate 确保连杆和数值的绘制，永远在 MPEManager 移动平台【之后】进行
@@ -233,36 +253,108 @@ namespace MPE
             {
                 // 3DOF 逻辑
                 localVerticesA = CalculateCenteredTriangleVertices(a, b, c);
-                localVerticesB = localVerticesA; // 3DOF上下形状一致
+
+                // ✨✨ 核心算法升级：如果 3DOF 开启了顺时针排列
+                // 此时直接交换数组中的 1 号点与 2 号点。这会在物理空间中让电机的环形编号发生镜像反转，变为顺时针排列
+                if (isClockwise)
+                {
+                    Vector3 temp = localVerticesA[1];
+                    localVerticesA[1] = localVerticesA[2];
+                    localVerticesA[2] = temp;
+                }
+
+                localVerticesB = localVerticesA; // 3DOF 上下保持一致
                 BuildMesh(meshA, localVerticesA);
                 BuildMesh(meshB, localVerticesB);
             }
             else
             {
-                // 6DOF 逻辑：先将毫米转换为米
+                // 6DOF 逻辑保持原样...
                 float tShortM = topShortEdge / 1000f;
                 float tLongM = topLongEdge / 1000f;
                 float bShortM = baseShortEdge / 1000f;
                 float bLongM = baseLongEdge / 1000f;
 
-                // 计算动平台 (Top / A) 的半径与夹角并生成
                 float topRadius = Mathf.Sqrt((tShortM * tShortM + tLongM * tLongM + tShortM * tLongM) / 3f);
                 float topJointAngle = Mathf.Asin(tShortM / (2f * topRadius)) * Mathf.Rad2Deg;
-                localVerticesA = CalculateStewartHexagonVertices(topRadius, topJointAngle, topPhaseOffset);
+                localVerticesA = CalculateStewartHexagonVertices(topRadius, topJointAngle, topPhaseOffset, isClockwise);
                 BuildMesh(meshA, localVerticesA);
 
-                // 计算静平台 (Base / B) 的半径与夹角并生成
                 float baseRadius = Mathf.Sqrt((bShortM * bShortM + bLongM * bLongM + bShortM * bLongM) / 3f);
                 float baseJointAngle = Mathf.Asin(bShortM / (2f * baseRadius)) * Mathf.Rad2Deg;
-                localVerticesB = CalculateStewartHexagonVertices(baseRadius, baseJointAngle, 0f);
+                localVerticesB = CalculateStewartHexagonVertices(baseRadius, baseJointAngle, 0f, isClockwise);
                 BuildMesh(meshB, localVerticesB);
             }
 
-            // 更新缓存记录，用于检测变化
+            // 更新所有缓存记录
             lastA = a; lastB = b; lastC = c; lastHeight = height;
             lastTShort = topShortEdge; lastTLong = topLongEdge;
             lastBShort = baseShortEdge; lastBLong = baseLongEdge;
             lastPhaseOffset = topPhaseOffset;
+            lastClockwise = isClockwise;
+
+            // ✨ 核心调用：每次网格刷新后，同步刷新红线的位置！
+            UpdateDirectionMarkers();
+        }
+
+        // ✨ 新增：更新动平台上的方向标识红线
+        void UpdateDirectionMarkers()
+        {
+            if (triangleA == null) return;
+
+            // 1. 延迟自动生成短边红线组件
+            if (shortEdgeMarker == null)
+            {
+                GameObject obj = new GameObject("ShortEdgeMarker_Red");
+                obj.transform.SetParent(triangleA.transform, false);
+                shortEdgeMarker = obj.AddComponent<LineRenderer>();
+                shortEdgeMarker.useWorldSpace = false; // 关键：关闭世界坐标，让红线永远死死贴在动平台上随动！
+                shortEdgeMarker.material = new Material(Shader.Find("Sprites/Default"));
+                shortEdgeMarker.startColor = Color.red;
+                shortEdgeMarker.endColor = Color.red;
+                shortEdgeMarker.startWidth = 0.02f; // 线宽 2 厘米
+                shortEdgeMarker.endWidth = 0.02f;
+            }
+
+            // 2. 延迟自动生长边红线组件
+            if (longEdgeMarker == null)
+            {
+                GameObject obj = new GameObject("LongEdgeMarker_Red");
+                obj.transform.SetParent(triangleA.transform, false);
+                longEdgeMarker = obj.AddComponent<LineRenderer>();
+                longEdgeMarker.useWorldSpace = false;
+                longEdgeMarker.material = new Material(Shader.Find("Sprites/Default"));
+                longEdgeMarker.startColor = Color.red;
+                longEdgeMarker.endColor = Color.red;
+                longEdgeMarker.startWidth = 0.02f;
+                longEdgeMarker.endWidth = 0.02f;
+            }
+
+            // 3. 根据当前模式决定是否显示，并赋予顶点坐标
+            if (currentPlatformType == PlatformType.DOF6 && localVerticesA != null && localVerticesA.Length >= 6)
+            {
+                shortEdgeMarker.gameObject.SetActive(true);
+                longEdgeMarker.gameObject.SetActive(true);
+
+                // 稍微抬高一点Y轴 (5毫米)，防止红线和平台模型本身发生 Z-Fighting (闪烁重叠)
+                Vector3 offset = Vector3.up * 0.005f;
+
+                // 顶点 0 和 1 构成的绝对是垂直于 X 轴的【短边】
+                shortEdgeMarker.positionCount = 2;
+                shortEdgeMarker.SetPosition(0, localVerticesA[2] + offset);
+                shortEdgeMarker.SetPosition(1, localVerticesA[3] + offset);
+
+                // 顶点 3 和 4 构成的绝对是垂直于 X 轴的【长边】
+                longEdgeMarker.positionCount = 2;
+                longEdgeMarker.SetPosition(0, localVerticesA[5] + offset);
+                longEdgeMarker.SetPosition(1, localVerticesA[0] + offset);
+            }
+            else
+            {
+                // 如果切回了 3DOF，则隐藏这两条标识线
+                shortEdgeMarker.gameObject.SetActive(false);
+                longEdgeMarker.gameObject.SetActive(false);
+            }
         }
 
         // ✨ 新增：运动学几何换算算法 (利用勾股定理，把设定的缸长转换为平台在3D空间中的垂直高度)
@@ -302,6 +394,38 @@ namespace MPE
                 return Mathf.Sqrt(cylinderSq - horizontalDistSq);
             }
         }
+
+
+        // ✨ 核心修正：利用勾股定理逆向运算，将【期望的绝对缸长】精准转换为【平台在3D空间中的垂直高度】
+        public float GetHeightFromCylinderLength(float cylinderLength)
+        {
+            if (currentPlatformType == PlatformType.DOF3)
+            {
+                // 3DOF 的缸是直上直下的，垂直高度就等于缸长
+                return cylinderLength;
+            }
+            else
+            {
+                if (localVerticesA == null || localVerticesB == null || localVerticesA.Length < 6 || localVerticesB.Length < 6)
+                    return cylinderLength;
+
+                // 提取 0 号腿的动平台锚点和 1 号腿的静平台锚点，计算它们之间的固定的水平跨度
+                Vector3 pTop = localVerticesA[0];
+                Vector3 pBase = localVerticesB[1];
+
+                float dx = pTop.x - pBase.x;
+                float dz = pTop.z - pBase.z;
+                float horizontalDistSq = dx * dx + dz * dz;
+
+                float cylinderSq = cylinderLength * cylinderLength;
+
+                if (cylinderSq < horizontalDistSq) return 0.1f;
+
+                // 垂直高度 = √(目标缸长² - 水平跨度²)
+                return Mathf.Sqrt(cylinderSq - horizontalDistSq);
+            }
+        }
+
         void BuildMesh(Mesh mesh, Vector3[] vertices)
         {
             if (mesh == null || vertices == null || vertices.Length == 0) return;
@@ -355,22 +479,30 @@ namespace MPE
             return new Vector3[] { p0, p1, p2 };
         }
 
-        Vector3[] CalculateStewartHexagonVertices(float radius, float jointAngle, float phaseOffset)
+        // ✨ 核心修改：加入 clockwise 参数，通过 dir 翻转整个平台的生成方向
+        Vector3[] CalculateStewartHexagonVertices(float radius, float jointAngle, float phaseOffset, bool clockwise)
         {
             Vector3[] vertices = new Vector3[6];
             float[] baseAngles = { 0f, 120f, 240f };
 
+            // 魔法在这里：如果是顺时针，圆周角度全部取反
+            float dir = clockwise ? -1f : 1f;
+
             for (int i = 0; i < 3; i++)
             {
                 float centerAngle = baseAngles[i] + phaseOffset;
-                float rad1 = (centerAngle - jointAngle) * Mathf.Deg2Rad;
-                float rad2 = (centerAngle + jointAngle) * Mathf.Deg2Rad;
+
+                // 角度乘上 dir，实现镜像反转
+                float rad1 = (centerAngle - jointAngle) * dir * Mathf.Deg2Rad;
+                float rad2 = (centerAngle + jointAngle) * dir * Mathf.Deg2Rad;
 
                 vertices[i * 2] = new Vector3(Mathf.Cos(rad1) * radius, 0, Mathf.Sin(rad1) * radius);
                 vertices[i * 2 + 1] = new Vector3(Mathf.Cos(rad2) * radius, 0, Mathf.Sin(rad2) * radius);
             }
             return vertices;
         }
+
+
 
         void UpdateLinksAndLabels()
         {
@@ -381,11 +513,7 @@ namespace MPE
             if (cam == null) cam = Camera.main;
 
             int linkCount = localVerticesA != null ? localVerticesA.Length : 0;
-            string[] prefixes = { "A", "B", "C", "D", "E", "F" };
 
-            // ✨ 核心修改 1：获取全局的安全极值（米）
-            // 初始缸长即为最短收缩距离，初始缸长+最大行程即为最长拉伸距离
-            // 加入 0.002f (2毫米) 的容差，防止 Unity 浮点数精度问题导致误报警
             float minSafeLength = Global.Instance.stroke - 0.002f;
             float maxSafeLength = Global.Instance.stroke + Global.Instance.maxStroke + 0.002f;
 
@@ -393,14 +521,26 @@ namespace MPE
             {
                 if (links[i] == null) continue;
 
-                Vector3 worldPosA = triangleA.transform.TransformPoint(localVerticesA[i]);
-
-                // 斯图尔特交叉连线算法
-                int baseIndex = i;
+                // ✨ 核心修改：动态适配 3自由度和6自由度的缸号映射逻辑
+                int mappedI = i;
                 if (currentPlatformType == PlatformType.DOF6)
                 {
-                    baseIndex = (i + 1) % 6;
+                    mappedI = (i + cylinderIndexShift) % 6;
                 }
+                else
+                {
+                    mappedI = (i + cylinderIndexShift) % 3; // ✨ 3自由度环形重映射 (0~2)
+                }
+
+                Vector3 worldPosA = triangleA.transform.TransformPoint(localVerticesA[mappedI]);
+
+                // 连线基座映射
+                int baseIndex = mappedI;
+                if (currentPlatformType == PlatformType.DOF6)
+                {
+                    baseIndex = (mappedI + 1) % 6; // 6DOF 采用交叉Stewart结构
+                }
+                // 3DOF 保持直上直下 (baseIndex = mappedI)
 
                 Vector3 worldPosB = triangleB.transform.TransformPoint(localVerticesB[baseIndex]);
 
@@ -410,21 +550,15 @@ namespace MPE
                 links[i].SetPosition(0, localPosA);
                 links[i].SetPosition(1, localPosB);
 
-                // 计算当前这根液压缸的实时拉伸长度
                 float dist = Vector3.Distance(worldPosA, worldPosB);
                 linkDistances[i] = dist;
 
-                // ✨ 核心修改 2：防顶缸判定
                 bool isDanger = dist < minSafeLength || dist > maxSafeLength;
-
-                // ✨ 核心修改 3：动态切换连杆材质颜色（危险显示红色，安全显示绿色）
                 links[i].material.color = isDanger ? Color.red : Color.green;
 
                 if (distanceLabels[i] != null)
                 {
-                    distanceLabels[i].text = $"{prefixes[i]}: {dist * 1000f:F0} mm";
-
-                    // ✨ 核心修改 4：动态切换文字颜色（危险显示红色，安全显示默认黄色）
+                    distanceLabels[i].text = $"[{i + 1}号缸] {dist * 1000f:F0} mm";
                     distanceLabels[i].color = isDanger ? Color.red : textColor;
                     distanceLabels[i].transform.localScale = Vector3.one * textScale;
                     distanceLabels[i].transform.position = (worldPosA + worldPosB) / 2f;

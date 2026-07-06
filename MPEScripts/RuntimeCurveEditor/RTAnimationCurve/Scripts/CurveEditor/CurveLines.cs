@@ -7,6 +7,7 @@ using UnityEngine;
 using System.Collections.Generic;
 using System.Collections;
 using Unity.VisualScripting;
+using UnityEngine.EventSystems;
 
 namespace RuntimeCurveEditor
 {
@@ -366,39 +367,32 @@ namespace RuntimeCurveEditor
         /// On each update, check if the mouse is clicked, if so check what (a basic shape, a tangent, key or a whole line).
         /// Also make updates of the mouse context menus list, when new keys are added/deleted.
         /// </summary>
-        void Update() {
-
+        void Update()
+        {
             //now check user interaction
-            if (curveWindow.IsTouchedBegan() || Input.GetMouseButtonDown(0) || Input.GetMouseButtonDown(1)) {
-                if (keyValue.IsKeyEditVisible() && !keyValue.FocusOnInputFields()) {
+            if (curveWindow.IsTouchedBegan() || Input.GetMouseButtonDown(0) || Input.GetMouseButtonDown(1))
+            {
+                if (keyValue.IsKeyEditVisible() && !keyValue.FocusOnInputFields())
+                {
                     keyValue.SetKeyEditEnabled(false);
                 }
                 Vector2 mousePos = curveWindow.CursorPos();
-                if (!keyValue.IsKeyEditVisible() && !contextMenuUI.Hover(mousePos)) {
-                    //check first if the user tries to drag the tangent of the selected key (these should be selectable even if they are outside of the grid)
+                if (!keyValue.IsKeyEditVisible() && !contextMenuUI.Hover(mousePos))
+                {
                     CheckMouseTangentSelection(mousePos);
-                    if (!isTangentSelected) 
-                    {/*
-                        for (int i = 0; i < SHAPE_COUNT; ++i) 
-                        {
-                            if (basicShapesRect[i].Contains(mousePos)) 
-                            {
-                                if (ActiveCurveForm.curve1 != null) 
-                                {
-                                    undoRedo.AddOperation(new BasicShapeOperation(this));
-                                    ReplaceActiveCurve(basicShapes[i]);
-                                    selectedKeyIndex = KeyHandling.UNSELECTED;
-                                }
-                                break;
-                            }
-                        }*/
+                    if (!isTangentSelected)
+                    {
                         if ((ActiveCurveForm.curve1 != null) && (GridRect.xMin - marginPixels < mousePos.x) && (GridRect.xMax + marginPixels > mousePos.x) &&
-                            (GridRect.yMin - marginPixels < mousePos.y) && (GridRect.yMax + marginPixels > mousePos.y)) {
+                            (GridRect.yMin - marginPixels < mousePos.y) && (GridRect.yMax + marginPixels > mousePos.y))
+                        {
 
                             bool anyCurveSelected = false;
-                            if (CheckMouseSelection(mousePos, ActiveCurveForm)) {
+                            if (CheckMouseSelection(mousePos, ActiveCurveForm))
+                            {
                                 anyCurveSelected = true;
-                            } else {
+                            }
+                            else
+                            {
                                 foreach (CurveForm curveForm in curveFormList)
                                 {
                                     if (curveForm.curve1 == ActiveCurveForm.curve1) continue;
@@ -410,13 +404,16 @@ namespace RuntimeCurveEditor
                                 }
                             }
 
-                            if (multipleKeySelection.MultipleKeysAreSelected()) {
+                            if (multipleKeySelection.MultipleKeysAreSelected())
+                            {
                                 if (Input.GetMouseButtonDown(0))
                                 {
                                     if (multipleKeySelection.InsideSelectedKeys())
                                     {
                                         multipleKeysMove = true;
-                                    } else {
+                                    }
+                                    else
+                                    {
                                         multipleKeysResize = multipleKeySelection.OnResizingLines();
                                     }
                                 }
@@ -424,11 +421,12 @@ namespace RuntimeCurveEditor
                                 if (multipleKeysMove || (multipleKeysResize != ResizePart.None))
                                 {
                                     PrepareSelectedKeysForMovement();
-                                } else {
+                                }
+                                else
+                                {
                                     multipleKeySelection.ClearMultipleKeySelection();
                                 }
                             }
-                            // --- 核心修改：必须按住 Shift 键，点击空白处才会触发多选(框选)逻辑 ---
                             if (!multipleKeysMove && (multipleKeysResize == ResizePart.None) && !anyCurveSelected && Input.GetMouseButtonDown(0))
                             {
                                 if (Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift))
@@ -439,33 +437,40 @@ namespace RuntimeCurveEditor
                         }
                     }
                 }
-            } else if (Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl)) {
-                if (Input.GetKeyUp(KeyCode.Z)) {
+            }
+            else if (Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl))
+            {
+                if (Input.GetKeyUp(KeyCode.Z))
+                {
                     Undo();
-                } else if (Input.GetKeyUp(KeyCode.Y)) {
+                }
+                else if (Input.GetKeyUp(KeyCode.Y))
+                {
                     Redo();
                 }
             }
+
             // ---------------- 修改：按空格或 Shift+空格 在红线处添加关键帧 ----------------
             if (Input.GetKeyDown(KeyCode.Space))
             {
-                // 检查是否同时按住了左 Shift 或 右 Shift
+                // ✨ 终极修复：在按下空格的瞬间，强行剥夺整个事件系统里的 UI 焦点，绝杀按钮误触！
+                if (EventSystem.current != null) EventSystem.current.SetSelectedGameObject(null);
+
                 if (Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift))
                 {
-                    AddKeysToAllCurvesAtTimeCursor(); // Shift + 空格：给所有(三条)曲线加帧
+                    AddKeysToAllCurvesAtTimeCursor();
                 }
                 else
                 {
-                    AddKeyAtTimeCursor(); // 仅按空格：只给当前高亮的曲线加帧
+                    AddKeyAtTimeCursor();
                 }
             }
             // --------------------------------------------------------------------------------------------------------------------------------------------
 
-            // === 新增：分离的键盘快捷键处理 ===
-            HandleKeyboardDelete();      // 专门处理删除
-            HandleKeyboardNavigation();  // 专门处理移动和切换
-            HandleKeyboardEdit();        // 专门处理打开编辑面板 (新增)
-            HandleKeyboardCurveSelection(); // 专门处理数字键切换曲线 (新增)
+            HandleKeyboardDelete();
+            HandleKeyboardNavigation();
+            HandleKeyboardEdit();
+            HandleKeyboardCurveSelection();
             DrawGridAndLines();
         }
 
@@ -1713,7 +1718,6 @@ namespace RuntimeCurveEditor
 
             if (!targetCurveForm.isVisible)
             {
-                // 如果隐藏的恰好是当前正在被激活(用于显示Y轴刻度)的曲线
                 if (ActiveCurveForm == targetCurveForm)
                 {
                     selectedKeyIndex = KeyHandling.UNSELECTED;
@@ -1726,7 +1730,6 @@ namespace RuntimeCurveEditor
                         keyValue.SetLabelEnabled(false);
                     }
 
-                    // ✨ 核心修复：自动寻找下一条可见的曲线作为基准，确保 Y 轴刻度能正确切换！
                     foreach (var form in curveFormList)
                     {
                         if (form.isVisible)
@@ -1739,12 +1742,17 @@ namespace RuntimeCurveEditor
             }
             else
             {
-                // 如果是重新显示一条曲线，顺便把它设为激活(焦点)，方便直接编辑
                 UpdateActiveCurveForm(targetCurveForm);
             }
 
             AlterData();
             Curves.TriggerUpdateCurves();
+
+            // ✨ 核心修复：点击完按钮后，立刻强制清空 UI 焦点，防止空格键误触！
+            if (EventSystem.current != null)
+            {
+                EventSystem.current.SetSelectedGameObject(null);
+            }
         }
 
 
@@ -1786,7 +1794,6 @@ namespace RuntimeCurveEditor
             }
             else
             {
-                // ✨ 核心修复：全部显示时，默认把第一条线（Pitch）设为激活基准
                 if (curveFormList.Count > 0)
                 {
                     UpdateActiveCurveForm(curveFormList[0]);
@@ -1795,6 +1802,12 @@ namespace RuntimeCurveEditor
 
             AlterData();
             Curves.TriggerUpdateCurves();
+
+            // ✨ 核心修复：点击完按钮后，立刻强制清空 UI 焦点，防止空格键误触！
+            if (EventSystem.current != null)
+            {
+                EventSystem.current.SetSelectedGameObject(null);
+            }
         }
 
         public int GetCurveFormIndex() {
@@ -1812,30 +1825,45 @@ namespace RuntimeCurveEditor
         /// <summary>
         /// Checks if the user wanna drag a tangent of the selected key
         /// </param>
-        void CheckMouseTangentSelection(Vector2 mousePos) {
-            if ((selectedKeyIndex >= 0) && Input.GetMouseButtonDown(0)) {
-                // ✨ 新增拦截：如果当前激活的曲线被隐藏了，禁止调节切线
+        void CheckMouseTangentSelection(Vector2 mousePos)
+        {
+            if ((selectedKeyIndex >= 0) && Input.GetMouseButtonDown(0))
+            {
                 if (!ActiveCurveForm.isVisible) return;
                 AnimationCurve curve = ActiveCurveForm.firstCurveSelected ? ActiveCurveForm.curve1 : ActiveCurveForm.curve2;
+
+                // 🚨 核心修复：防止 GetKey() 越界报错！严格确保 selectedKeyIndex 小于曲线实际长度
+                if (selectedKeyIndex >= curve.length)
+                {
+                    selectedKeyIndex = KeyHandling.UNSELECTED; // 立刻重置废弃的越界索引
+                    isTangentSelected = false;
+                    return; // 打断，避免执行后面的越界访问
+                }
+
                 Vector2 keyScreenPos = Utils.Convert(new Vector2(curve[selectedKeyIndex].time, curve[selectedKeyIndex].value), EntireRect, ActiveCurveForm.gradRect);
 
-                if (adjGridRect.Contains(keyScreenPos)) {//check first the keyframe(and tangents) are visible
-                    Keyframe keyframe = curve[selectedKeyIndex];     
+                if (adjGridRect.Contains(keyScreenPos))
+                {
+                    Keyframe keyframe = curve[selectedKeyIndex];
                     ContextMenu contextMenu = GetContextMenuForCurrentKey();
-                    if (curve.length - selectedKeyIndex > 1) {
-                        if (Curves.tangPeakRightVisible && Vector2.SqrMagnitude(Curves.tangPeakRight - mousePos) <= sqrMarginPixels) {
+                    if (curve.length - selectedKeyIndex > 1)
+                    {
+                        if (Curves.tangPeakRightVisible && Vector2.SqrMagnitude(Curves.tangPeakRight - mousePos) <= sqrMarginPixels)
+                        {
                             isTangentSelected = true;
                             leftTangentSelected = false;
                         }
                     }
                     if (!isTangentSelected && (selectedKeyIndex > 0))
                     {
-                        if (Curves.tangPeakLeftVisible && Vector2.SqrMagnitude(Curves.tangPeakLeft - mousePos) <= sqrMarginPixels) {
+                        if (Curves.tangPeakLeftVisible && Vector2.SqrMagnitude(Curves.tangPeakLeft - mousePos) <= sqrMarginPixels)
+                        {
                             isTangentSelected = true;
                             leftTangentSelected = true;
                         }
                     }
-                    if (isTangentSelected) {
+                    if (isTangentSelected)
+                    {
                         undoRedo.AddOperation(new TangentModeOperation(this, contextMenu, keyframe.inTangent, keyframe.outTangent));
                     }
                 }
@@ -2492,49 +2520,50 @@ namespace RuntimeCurveEditor
             KeyHandling.UpdateAutoLinearSideEffects(selectedKeyIndex);
         }
 
-        public void MouseDrag(Vector2 diff) {
-
-            // ---------------- 修改：按住 Alt 智能锁定拖拽轴向 ----------------
+        public void MouseDrag(Vector2 diff)
+        {
             bool ctrlHeld = Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
 
             if (ctrlHeld)
             {
-                // 当还没确定锁定方向时，根据这一帧的移动趋势(diff)来决定并锁定
                 if (currentAxisLock == AxisLock.None)
                 {
                     if (Mathf.Abs(diff.x) > Mathf.Abs(diff.y))
-                    {
-                        currentAxisLock = AxisLock.Horizontal; // 横向移动幅度更大，锁定为横向
-                    }
+                        currentAxisLock = AxisLock.Horizontal;
                     else if (Mathf.Abs(diff.y) > Mathf.Abs(diff.x))
-                    {
-                        currentAxisLock = AxisLock.Vertical;   // 纵向移动幅度更大，锁定为纵向
-                    }
+                        currentAxisLock = AxisLock.Vertical;
                 }
 
-                // 根据已经确定的锁定方向，强行过滤掉另一个方向的增量
-                if (currentAxisLock == AxisLock.Horizontal)
-                {
-                    diff.y = 0f;
-                }
-                else if (currentAxisLock == AxisLock.Vertical)
-                {
-                    diff.x = 0f;
-                }
+                if (currentAxisLock == AxisLock.Horizontal) diff.y = 0f;
+                else if (currentAxisLock == AxisLock.Vertical) diff.x = 0f;
             }
             else
             {
-                // 如果用户在中途松开了 Ctrl 键，立刻解除锁定
                 currentAxisLock = AxisLock.None;
             }
 
             AnimationCurve activeCurve = ActiveCurveForm.SelectedCurve();
-            if (activeCurve != null) {
+            if (activeCurve != null)
+            {
+
+                // 🚨 核心修复：拖拽时同样进行越界查杀。如果脏数据试图拖拽越界索引，直接打断。
+                if ((isTangentSelected || keyDragged) && (selectedKeyIndex < 0 || selectedKeyIndex >= activeCurve.length))
+                {
+                    selectedKeyIndex = KeyHandling.UNSELECTED;
+                    isTangentSelected = false;
+                    keyDragged = false;
+                    return;
+                }
+
                 List<ContextMenu> listContextMenus = contextMenuManager.dictCurvesContextMenus[activeCurve];
-                if (isTangentSelected || keyDragged) {
-                    Keyframe keyframe = activeCurve[selectedKeyIndex];
+                if (isTangentSelected || keyDragged)
+                {
+                    Keyframe keyframe = activeCurve[selectedKeyIndex]; // 现在绝对安全了
                     Vector2 keyframePos = Utils.Convert(new Vector2(keyframe.time, keyframe.value), EntireRect, gradRect);
-                    if (isTangentSelected) {//if any tangent is selected
+
+                    // ... (保持你现有的拖拽算法部分完全不变) ...
+                    if (isTangentSelected)
+                    {
                         Vector2 mousePos = curveWindow.CursorPos();
                         float ratio = gradRect.height * EntireRect.width / (gradRect.width * EntireRect.height);
 

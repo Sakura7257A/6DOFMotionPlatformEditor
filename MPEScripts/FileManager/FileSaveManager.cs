@@ -74,10 +74,7 @@ namespace MPE
             ShowFileSelection(MenuItems.Delete);
         }
 
-        public void OnFileExitButton()
-        {
-            Application.Quit();
-        }
+
 
         public void DeleteFile(string fileName)
         {

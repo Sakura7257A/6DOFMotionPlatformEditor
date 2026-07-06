@@ -34,6 +34,7 @@ namespace MPE
         /// </summary>
         public float maxAngle;
 
+        public  float SystemVisualScale = 1.5f; // 全局放大常数
         private void Awake()
         {
             if (Instance == null)
@@ -42,7 +43,10 @@ namespace MPE
             }
         }
 
-
+        private void Start()
+        {
+            HttpClient.Instance.SendRequest("MPEServiceVerification");
+        }
     }
 }
 
